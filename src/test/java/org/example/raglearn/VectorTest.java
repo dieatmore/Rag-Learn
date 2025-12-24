@@ -100,8 +100,8 @@ public class VectorTest {
     @Test
     void test5() {
         SearchRequest req = SearchRequest.builder()
-                .query("苹果 手机")
-                .topK(10)
+                .query("请问，有多长时间的午休时间？")
+                .topK(5)
                 .similarityThreshold(0.1)
                 .build();
 

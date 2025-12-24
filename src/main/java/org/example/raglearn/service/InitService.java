@@ -24,14 +24,17 @@ import java.util.Optional;
 @Slf4j
 @RequiredArgsConstructor
 public class InitService {
+
+    // DashScope嵌入模型的批量请求上限（固定为10）
+    private static final int DASHSCOPE_BATCH_LIMIT = 10;
     private final VectorStore vectorStore;
     @Value("classpath:handbook.txt")
-    private Resource handbook;
+    private Resource txtSource;
 
     // 启动时，将手册插入qdrant数据库
     @EventListener(ApplicationReadyEvent.class)
     public void initHandbook() throws Exception {
-        String script = handbook.getContentAsString(Charset.defaultCharset());
+        String script = txtSource.getContentAsString(Charset.defaultCharset());
         String firstLine = script.split("\\R", 2)[0];
         // 取第一个模块名称，判断数据库是否已经存在
         SearchRequest request = SearchRequest.builder()
@@ -70,6 +73,23 @@ public class InitService {
             var doc = new Document(info, Map.of("title", title));
             docs.add(doc);
         }
+        List<List<Document>> batches = splitIntoBatches(docs, DASHSCOPE_BATCH_LIMIT);
+        for (int i = 0; i < batches.size(); i++) {
+            List<Document> batch = batches.get(i);
+            log.info("提交第 {} 批Document，数量：{}", i + 1, batch.size());
+            vectorStore.add(batch);
+        }
         vectorStore.add(docs);
+    }
+
+    private List<List<Document>> splitIntoBatches(List<Document> documents, int batchSize) {
+        List<List<Document>> batches = new ArrayList<>();
+        for (int i = 0; i < documents.size(); i += batchSize) {
+            int endIndex = Math.min(i + batchSize, documents.size());
+            // 关键修复：将subList转为新的ArrayList，脱离原列表引用
+            List<Document> batch = new ArrayList<>(documents.subList(i, endIndex));
+            batches.add(batch);
+        }
+        return batches;
     }
 }
