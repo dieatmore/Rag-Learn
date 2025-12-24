@@ -47,17 +47,25 @@ public class HandbookService {
                 .build();
 
         // 自定义Prompt模板2：无上下文时用自身知识回答
+        // todo: 改为判断是否存在上下文，现在不存在时ai回答还是会参照上下文
         PromptTemplate withoutContextTemplate = PromptTemplate.builder()
                 .renderer(StTemplateRenderer.builder().startDelimiterToken('<').endDelimiterToken('>').build())
                 .template("""
-                        <query>
+                    <query>
 
-                        Answer the query with your own knowledge, be concise and accurate (in Chinese).
-                        
-                         ---------------------
-                         <context>
-                         ---------------------
-                        """)
+                    Context information is below.
+
+                    ---------------------
+                    <context>
+                    ---------------------
+
+                    Given the context information and no prior knowledge, answer the query.
+
+                    Follow these rules:
+
+                    1. If the answer is not in the context, Answer the query with your own knowledge, be concise and accurate (in Chinese).
+                    2. Avoid statements like "Based on the context..." or "The provided information...".
+                    """)
                 .build();
 
         // 无上下文自己回答
@@ -83,7 +91,7 @@ public class HandbookService {
                 .build();
 
         return chatClient.prompt()
-                .advisors(qaAdvisorWithout)
+                .advisors(qaAdvisor)
                 .user(question)
                 .call()
                 .content();
