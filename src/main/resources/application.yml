@@ -1,0 +1,23 @@
+spring:
+  config:
+    import: classpath:application-secret.yml # 我的阿里apikey
+  ai:
+    dashscope:
+      embedding:
+        options:
+          model: 'text-embedding-v4'
+
+    vectorstore:
+      qdrant:
+        host: localhost
+        port: 16334
+        collection-name: my-vectors
+        use-tls: false
+        initialize-schema: true
+
+logging:
+  level:
+    root: info
+    org.example: debug
+  pattern:
+    console: '%-5level %C.%M[%line] - %msg%n'
