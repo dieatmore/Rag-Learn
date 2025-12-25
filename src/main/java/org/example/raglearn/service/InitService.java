@@ -85,7 +85,6 @@ public class InitService {
         List<List<Document>> batches = new ArrayList<>();
         for (int i = 0; i < documents.size(); i += batchSize) {
             int endIndex = Math.min(i + batchSize, documents.size());
-            // 关键修复：将subList转为新的ArrayList，脱离原列表引用
             List<Document> batch = new ArrayList<>(documents.subList(i, endIndex));
             batches.add(batch);
         }
