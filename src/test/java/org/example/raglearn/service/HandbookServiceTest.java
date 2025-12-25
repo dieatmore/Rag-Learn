@@ -26,7 +26,8 @@ class HandbookServiceTest {
 //        var str = "挑战杯竞赛能得多少分";
 //        var str = "论文发表日期截止到什么时候";
 //        var str = "中科院 3 分区期刊属于什么级别论文";
-        var str = "集体竞赛项目主力成员认定规则";
+//        var str = "集体竞赛项目主力成员认定规则";
+        var str = "蓝桥杯一等奖可以得多少分啊？";
         var answer = handbookService.getAnswer(str);
         log.debug(answer);
     }
