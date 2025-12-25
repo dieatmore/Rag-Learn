@@ -28,7 +28,7 @@ public class InitService {
     // DashScope嵌入模型的批量请求上限（固定为10）
     private static final int DASHSCOPE_BATCH_LIMIT = 10;
     private final VectorStore vectorStore;
-    @Value("classpath:rulelist.txt")
+    @Value("classpath:eventlist.txt")
     private Resource txtSource;
 
     // 启动时，将手册插入qdrant数据库
