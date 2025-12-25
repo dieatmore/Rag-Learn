@@ -86,7 +86,7 @@ public class HandbookService {
                 .promptTemplate(customPromptTemplate)
                 .searchRequest(SearchRequest.builder()
                         .similarityThreshold(0.4)
-                        .topK(3)
+                        .topK(5)
                         .build())
                 .build();
 
