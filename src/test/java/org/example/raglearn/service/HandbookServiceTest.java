@@ -24,7 +24,7 @@ class HandbookServiceTest {
 //        var str = "全国大学生软件创新大赛是什么等级？"; // 可以
 //        var str = "软件创新大赛是什么等级？"; // 可以（全国大学生软件创新大赛属于第二等级学科竞赛。）
 //        var str = "大学生软件大赛是什么等级？"; // “中国软件杯”大学生软件设计大赛属于第二等级学科竞赛。
-        var str = "毕业设计创新大赛是第一等级学科竞赛吗？";
+        var str = "全国大学生工业设计大赛就是第二等级的";
         var answer = handbookService.getAnswer(str);
         log.debug(answer);
     }
