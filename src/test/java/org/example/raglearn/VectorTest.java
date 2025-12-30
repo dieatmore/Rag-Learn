@@ -100,7 +100,7 @@ public class VectorTest {
     @Test
     void test5() {
         SearchRequest req = SearchRequest.builder()
-                .query("蓝桥杯一等奖可以得多少分啊？")
+                .query("蓝桥杯二等奖团体内第五名可以得多少分？")
                 .topK(15)
                 .similarityThreshold(0.1)
                 .build();
