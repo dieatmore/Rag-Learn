@@ -2,12 +2,13 @@
 
 ## 📝 OVERVIEW
 
-RAG的学习记录：了解RAG，测试并完成一个RAG的使用。
+RAG的学习记录：了解 RAG 流程，并基于 Ragas 量化评估。
 
 ### 🛠️ Development Tools
 
 - spring-boot
 - spring-ai
+- ragas
 - qdrant 向量数据库
 
 ### 🤖 MODEL
@@ -431,3 +432,4 @@ Given the context information and no prior knowledge, answer the query strictly 
    > answer:
    > 
    >  40分。全国大学生数学竞赛属于第二等级学科竞赛，其一等奖对应计40分；全国大学生机械创新设计大赛属于第二等级学科竞赛，其二等奖对应计30分。根据代表作制不累计计分，取最高等级计分，因此计40分。
+

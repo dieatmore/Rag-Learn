@@ -100,9 +100,9 @@ public class VectorTest {
     @Test
     void test5() {
         SearchRequest req = SearchRequest.builder()
-                .query("我得了一个机械创新设计大赛二等奖和全国大学生数学竞赛一等奖，有多少分？")
-                .topK(15)
-                .similarityThreshold(0.1)
+                .query("以东北林业大学为第一署名单位，独立作者发表的中科院2区期刊论文能加多少分？")
+                .topK(5)
+                .similarityThreshold(0.4)
                 .build();
 
         vectorStore.similaritySearch(req)
