@@ -8,12 +8,12 @@
 
 | 维度 | 当前状态 | 问题 |
 |------|---------|------|
-| 知识库 | ✅ PDF 解析完成（`pdf_structured_manual.md`），待嵌入向量库 | ~~单一来源，缺少全面发展成绩指标的 PDF 材料~~ → 已解决 |
-| 分块策略 | 空行分割，单块过大或过碎 | 无语义切分，无重叠窗口 |
+| 知识库 | ✅ PDF 解析完成 + 双数据源已接入 Qdrant | ~~单一来源，缺少全面发展成绩指标的 PDF 材料~~ → 已解决 |
+| 分块策略 | 空行分割 + `---` 分隔，语义段落完整 | 无重叠窗口 |
 | 检索方式 | 纯向量检索（DashScope text-embedding-v4） | 关键词匹配弱，规则段常挤占比赛目录段 |
 | 排序 | 仅按相似度分数 | 无精排，topK 中相关文档未必排前面 |
-| 系统 Prompt | ✅ 已优化：三层架构 + 关键词意图分类，配置外置 YAML | ~~12 条规则硬编码在 Java 代码中~~ → 已解决 |
-| 文档管理 | 启动时全量读入，无法增量更新 | 规则变动必须重启服务 |
+| 系统 Prompt | ✅ 已优化：三层架构 + AI 多意图分类，配置外置 YAML | ~~12 条规则硬编码在 Java 代码中~~ → 已解决 |
+| 文档管理 | ✅ 已实现 checksum 增量同步，不变 chunk 跳过 embedding | ~~启动时全量读入，无法增量更新~~ → 已解决 |
 | 输出方式 | 同步阻塞返回完整结果 | 用户等待时间长，体验差 |
 | 评估 | Ragas 手动测试 | 未形成自动化闭环 |
 
@@ -293,23 +293,69 @@ AI 分类（chatClient 轻量调用，200-500ms）
 
 ---
 
+#### 迭代四：多意图分类（v4，当前方案）
+
+v3 只能输出单个意图。真实场景下用户经常同时涉及多个领域——"竞赛一等奖和EI论文总共能加多少分"同时需要 competition 和 paper 两套规则。
+
+**改动**：分类 prompt 允许多标签输出，代码改为收集多个意图、合并所有命中的规则层。
+
+**分类 prompt**（改一行）：
+
+```
+可多选：competition / paper / general / none。
+仅回复一个或多个单词，用逗号分隔。
+如果选了 none 就不要选其他。
+```
+
+**解析逻辑**：
+
+```java
+// 返回意图集合，遍历合并所有命中规则
+private Set<String> classifyIntent(String question) {
+    // ... 分类 prompt ...
+    Set<String> intents = new LinkedHashSet<>();
+    if (cleaned.contains("competition")) intents.add("competition");
+    if (cleaned.contains("paper")) intents.add("paper");
+    if (cleaned.contains("general")) intents.add("general");
+    return intents;  // 可能 0~3 个
+}
+
+// 规则拼装 — 遍历合并
+StringBuilder rules = new StringBuilder();
+for (String intent : intents) {
+    // ... switch 取对应规则，换行拼接 ...
+}
+```
+
+**效果对比**：
+
+| 用户问题 | v3 输出 | v4 输出 | v4 注入规则 |
+|----------|---------|---------|------------|
+| 蓝桥杯二等奖多少分 | competition | competition | competition |
+| 竞赛一等奖和EI论文能加多少分 | competition | competition, paper | competition + paper |
+| 班长+竞赛获奖+论文分别加多少 | competition | competition, paper, general | 三组全注入 |
+| 今天天气 | none | none | 空 |
+
+---
+
 #### 与原始计划的差异
 
-| 维度 | 原计划 | v2 | v3（最终） |
-|------|--------|-----|-----------|
-| Prompt 存分值 | ✅ 写死分值 | ❌ | ❌（上下文提供） |
-| 意图分类方式 | 未明确 | 关键词匹配 | AI 调用 |
-| 分类准确率 | - | 60-80% | 90%+ |
-| 意图分支 | 3 类 | 4 类（+none） | 4 类（+none） |
-| 配置方式 | YAML/资源文件 | `@ConfigurationProperties` + YAML | 同 v2 |
+| 维度 | 原计划 | v2 | v3 | v4（最终） |
+|------|--------|-----|-----|-----------|
+| Prompt 存分值 | ✅ 写死分值 | ❌ | ❌ | ❌（上下文提供） |
+| 意图分类方式 | 未明确 | 关键词匹配 | AI 单标签 | AI 多标签 |
+| 分类准确率 | - | 60-80% | 90%+ | 90%+ |
+| 支持多意图 | - | ❌ | ❌ | ✅ |
+| 意图分支 | 3 类 | 4 类（+none） | 4 类（+none） | 4 类（+none） |
+| 配置方式 | YAML/资源文件 | `@ConfigurationProperties` + YAML | 同 v2 | 同 v2 |
 
 #### 涉及文件
 
 | 文件 | 变更 |
 |------|------|
 | `config/PromptConfig.java` | 🆕 新增，`@ConfigurationProperties(prefix = "rag.prompts")` |
-| `application.yml` | 新增 `rag.prompts` 节点（五段） |
-| `HandbookService.java` | 重构：`classifyIntent()` 改为 AI 调用，`getAnswer()` 动态拼装三层 prompt |
+| `application.yml` | 新增 `rag.prompts` 节点（base/competition/paper/general/output 五段） |
+| `HandbookService.java` | 重构：`classifyIntent()` 改为 AI 多标签调用（`Set<String>`），`getAnswer()` 遍历合并所有命中规则层 |
 
 ---
 
@@ -417,7 +463,35 @@ public List<Document> rerank(String question, List<Document> candidates, int top
 
 ---
 
-### 3.5 文档管理（增量更新）
+### 3.5 文档管理（增量更新）✅ 已完成
+
+> **状态：已实现。** 新增 `DocumentManager.java` 服务，改造 `InitService.java` 委托给 DocumentManager。支持 checksum 增量同步——改一个字只重新 embedding 变化 chunk，不变部分跳过。
+
+**涉及文件**：
+
+| 文件 | 变更 |
+|------|------|
+| `service/DocumentManager.java` | 🆕 新增，封装增量同步全部逻辑 |
+| `service/InitService.java` | 🔄 改造，文件读取+切分保留，入库委托给 DocumentManager |
+
+**实现细节**：
+
+| 特性 | 方案 |
+|------|------|
+| 稳定 Point ID | UUID v5（`doc_id + chunk_index` 确定性生成），同一段落永远同 ID |
+| 内容校验 | MD5 哈希，改一字校验和不同 |
+| 已有数据查询 | Qdrant native client `scroll` API，按 `doc_id` 过滤 |
+| Diff 算法 | 新增 → add、变更 → delete 旧 + add 新、不变 → skip、多余 → delete |
+| 分批写入 | 仍遵守 DashScope text-embedding-v4 单次 10 条限制 |
+| Payload 索引 | 新增 `doc_id` 字段 Keyword 索引，scroll 查询 O(1) |
+| 启动行为 | `ApplicationReadyEvent` 时自动同步两个数据源（eventlist + pdf_score_rules） |
+
+**设计原因**：
+
+原方案中 Payload 含 `doc_version`、`category`、`key_rules` 等字段（见下方原设计），实际实现做了精简：
+- `doc_version` 保留（供未来版本管理）
+- `category` / `key_rules` 暂不添加——检索靠 vector similarity，这些字段不参与检索，且 LLM 从 chunk 文本中可直接读到完整规则，额外标签不增加准确率
+- 新增 `updated_at` 时间戳，方便排查同步时间
 
 **当前痛点**：
 - `InitService.initHandbook()` 在 `ApplicationReadyEvent` 时全量读取 `eventlist.txt`
@@ -425,6 +499,9 @@ public List<Document> rerank(String question, List<Document> candidates, int top
 - 规则变更时必须：清空 Qdrant Collection → 重启服务 → 重新 Embedding
 
 **优化目标**：支持增量更新，不删除不重启。
+
+<details>
+<summary>原方案设计（保留参考）</summary>
 
 **方案设计**：
 
@@ -500,6 +577,10 @@ public class DocumentController {
     }
 }
 ```
+
+---
+
+</details>
 
 ---
 
@@ -620,7 +701,7 @@ Week 1 ──────── Week 2 ──────── Week 3 ───
    ▼               ▼               ▼               ▼
 ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
 │ Prompt  │  │ PDF接入   │  │ 混合检索  │  │ 流式输出  │
-│ 优化 ✅ │  │ +文档管理 │  │ +Reranker│  │ +API层   │
+│ 优化 ✅ │  │+文档管理 ✅│  │ +Reranker│  │ +API层   │
 └─────────┘  └──────────┘  └──────────┘  └──────────┘
    │               │               │               │
    └───────────────┴───────────────┴───────────────┘
@@ -633,7 +714,7 @@ Week 1 ──────── Week 2 ──────── Week 3 ───
 
 **建议顺序**：
 1. **Prompt 优化**（最快见效，不影响架构）→ ✅ 已完成
-2. **PDF 接入 + 文档管理**（知识库扩展，基础工作）→ PDF 解析已完成，待嵌入向量库
+2. **PDF 接入 + 文档管理**（知识库扩展，基础工作）→ ✅ 已完成
 3. **混合检索 + Reranker**（检索质量核心提升）→ 待开始
 4. **流式输出 + REST API**（产品化，简历亮点）→ 待开始
 

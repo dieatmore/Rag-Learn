@@ -111,6 +111,47 @@ public class VectorTest {
                 });
     }
 
+    /**
+     * 检索效果验证：用几个典型问题测 top-3 返回是否命中正确段落
+     */
+    @Test
+    void testRetrievalQuality() {
+        String[] queries = {
+                "国家级大学生创新项目加多少分？",
+                "CSP认证300分能加几分？",
+                "发表中科院2区论文能加多少分？",
+                "参加ACM-ICPC竞赛获得二等奖算第几等级？",
+                "体育竞赛世界级前8名能加几分？",
+                "参军入伍期满没有处分加多少分？"
+        };
+
+        for (String query : queries) {
+            log.info("╔══════════════════════════════════════════╗");
+            log.info("║ 查询: {} ║", query);
+            log.info("╚══════════════════════════════════════════╝");
+
+            SearchRequest req = SearchRequest.builder()
+                    .query(query)
+                    .topK(3)
+                    .similarityThreshold(0.01)
+                    .build();
+
+            var results = vectorStore.similaritySearch(req);
+            if (results.isEmpty()) {
+                log.warn("  ⚠ 无结果！相似度阈值可能过高");
+            }
+            for (int i = 0; i < results.size(); i++) {
+                var doc = results.get(i);
+                // 只打前100字 + title，避免日志爆炸
+                String snippet = doc.getText().replace("\n", "\\n");
+                if (snippet.length() > 150) snippet = snippet.substring(0, 150) + "...";
+                log.info("  #{}, score={:.4f}, title={}", i + 1, doc.getScore(),
+                        doc.getMetadata().getOrDefault("title", "无"));
+                log.info("    内容: {}", snippet);
+            }
+        }
+    }
+
     @Test
     void test6() {
         // var str = "公司的年假有几天？";
