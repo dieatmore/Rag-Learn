@@ -2,13 +2,13 @@
 
 ## 📝 OVERVIEW
 
-RAG的学习记录：了解 RAG 流程，并基于 Ragas 量化评估。
+RAG的学习记录：了解 RAG 流程，并基于 DeepEval 量化评估。
 
 ### 🛠️ Development Tools
 
 - spring-boot
 - spring-ai
-- ragas
+- deepeval（替代 ragas，原生支持通义千问）
 - qdrant 向量数据库
 
 ### 🤖 MODEL

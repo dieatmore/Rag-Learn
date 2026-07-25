@@ -2,6 +2,8 @@ package org.example.raglearn.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import org.example.raglearn.config.PromptConfig;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
@@ -20,18 +22,18 @@ public class HandbookService {
     private final PromptConfig promptConfig;
 
     /**
-     * 用轻量 LLM 调用做意图分类。
+     * 用轻量 LLM 调用做多意图分类（一个问题可能同时涉及多个类别）。
      * 延迟约 200-500ms，比关键词匹配准确率高得多。
-     * 失败时回退到空字符串（none，不注入规则层）。
+     * 失败时回退到空集合（不注入规则层）。
      */
-    private String classifyIntent(String question) {
+    Set<String> classifyIntent(String question) {
         String classifyPrompt = """
-                将以下用户问题分类为 competition / paper / general / none，仅回复一个单词。
+                将以下用户问题分类，可同时属于多个类别。仅回复逗号分隔的类别单词，如 "competition, paper"。
 
                 competition：涉及竞赛、比赛、奖项、排名、名次、团队项目等
                 paper：涉及论文、期刊、发表、作者署名等
                 general：涉及CSP认证、外语等级、荣誉称号、学生任职、参军实习、创新项目、操行评等、活动表彰等
-                none：与以上均不相关
+                若与以上均不相关，回复 none
 
                 问题：%s
                 分类：""".formatted(question);
@@ -42,32 +44,40 @@ public class HandbookService {
                     .call()
                     .content();
             if (result != null) {
+                Set<String> intents = new LinkedHashSet<>();
                 String cleaned = result.strip().toLowerCase();
-                if (cleaned.contains("competition")) return "competition";
-                if (cleaned.contains("paper")) return "paper";
-                if (cleaned.contains("general")) return "general";
-                if (cleaned.contains("none")) return "";
+                if (cleaned.contains("competition")) intents.add("competition");
+                if (cleaned.contains("paper")) intents.add("paper");
+                if (cleaned.contains("general")) intents.add("general");
+                if (cleaned.contains("none")) return Set.of();
+                if (!intents.isEmpty()) return intents;
             }
         } catch (Exception e) {
             log.warn("意图分类 LLM 调用失败，回退为 none", e);
         }
-        return ""; // 兜底：不注入规则层
+        return Set.of(); // 兜底：不注入规则层
     }
 
     // ────────── 核心问答 ──────────
 
     public String getAnswer(String question) {
 
-        // Step 1: AI 意图分类，选择规则层
-        String intent = classifyIntent(question);
-        String categoryRules = switch (intent) {
-            case "competition" -> promptConfig.getCompetition();
-            case "paper" -> promptConfig.getPaper();
-            case "general" -> promptConfig.getGeneral();
-            default -> ""; // none — 不注入规则
-        };
-        log.debug("意图: {} | 规则层: {}", intent.isEmpty() ? "none" : intent,
-                intent.isEmpty() ? "无" : "已注入");
+        // Step 1: AI 多意图分类，拼接多个规则层
+        Set<String> intents = classifyIntent(question);
+        StringBuilder rulesBuilder = new StringBuilder();
+        for (String intent : intents) {
+            String rule = switch (intent) {
+                case "competition" -> promptConfig.getCompetition();
+                case "paper" -> promptConfig.getPaper();
+                case "general" -> promptConfig.getGeneral();
+                default -> null;
+            };
+            if (rule != null && !rule.isEmpty()) {
+                if (!rulesBuilder.isEmpty()) rulesBuilder.append("\n");
+                rulesBuilder.append(rule);
+            }
+        }
+        String categoryRules = rulesBuilder.toString();
 
         // Step 2: 三层拼装：base + 规则层 + output
         StringBuilder prompt = new StringBuilder(promptConfig.getBase());

@@ -8,12 +8,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 @SpringBootTest
 public class RagEvaluationTest {
+
     @Autowired
-    private RagasEvaluationClient ragasClient;
+    private DeepEvalEvaluationClient deepEvalClient;
 
     @Autowired
     private HandbookService handbookService;
@@ -22,89 +25,193 @@ public class RagEvaluationTest {
     private VectorStore vectorStore;
 
     /**
-     * 核心工具方法：获取真实召回的上下文（原始文本，去掉过滤，只保留topK控制）
-     * @param question 测试问题
-     * @param topK 召回数量（建议论文场景设为2，竞赛场景设为3，避免过多无关内容）
-     * @return 真实召回的上下文列表（原始文本）
+     * 结构化测试用例。
      */
-    private List<String> getRealContexts(String question, int topK) {
-        // 构建检索请求
-        SearchRequest searchRequest = SearchRequest.builder()
-                .query(question)
-                .topK(topK)
-                .build();
+    record TestCase(String question, Set<String> expectedIntents, List<String> keyFacts) {
+        TestCase(String question, Set<String> expectedIntents, String... keyFacts) {
+            this(question, expectedIntents, Arrays.asList(keyFacts));
+        }
+    }
 
-        // 执行真实检索，获取原始Document
-        List<Document> retrievedDocs = vectorStore.similaritySearch(searchRequest);
+    /**
+     * 单条评估数据的载体，直接对应 DeepEval API 的 test_item 字段。
+     */
+    record EvalItem(String question, Set<String> expectedIntents, Set<String> actualIntents,
+                    String answer, List<String> contexts, String groundTruth) {}
 
-        // 提取原始文本（保留所有格式，无人工改写）
-        return retrievedDocs.stream()
+    // ── 检索 ──────────────────────────────────────────────────
+
+    private List<String> retrieveContexts(String question, int topK) {
+        return vectorStore.similaritySearch(
+                        SearchRequest.builder().query(question).topK(topK).build())
+                .stream()
                 .map(Document::getText)
                 .collect(Collectors.toList());
     }
 
+    // ── 唯一入口：采集意图 + 答案 + 检索 → DeepEval 评估 ─────
+
     @Test
-    void testRAGEvaluation() {
-        List<Map<String, Object>> testCases = new ArrayList<>();
+    void evaluate() {
+        List<TestCase> cases = buildTestCases();
+        System.out.println("===== DeepEval 数据采集，共 " + cases.size() + " 条用例（并发 3）=====");
 
-        // 测试用例1：全国大学生机械创新设计大赛二等奖能加多少分？
-        String q1 = "全国大学生机械创新设计大赛二等奖能加多少分？";
-        Map<String, Object> testCase1 = new HashMap<>();
-        testCase1.put("question", q1);
-        testCase1.put("ground_truth", "全国大学生机械创新设计大赛属于第二等级学科竞赛，其二等奖可加30分；集体项目仅认定前两名，第三名无额外加分，且竞赛获奖实行代表作制，多项获奖不累计计分。");
-        testCase1.put("contexts", getRealContexts(q1, 5));
-        testCase1.put("answer", handbookService.getAnswer(q1));
-        testCases.add(testCase1);
+        // 并发采集，限制并发避免 DashScope 限流
+        List<EvalItem> items;
+        try (var executor = Executors.newFixedThreadPool(3)) {
+            items = cases.stream()
+                    .map(tc -> CompletableFuture.supplyAsync(() -> {
+                        Set<String> actualIntents = handbookService.classifyIntent(tc.question);
+                        String answer = handbookService.getAnswer(tc.question);
+                        List<String> contexts = retrieveContexts(tc.question, 5);
+                        String groundTruth = String.join("；", tc.keyFacts);
+                        return new EvalItem(tc.question, tc.expectedIntents, actualIntents,
+                                answer, contexts, groundTruth);
+                    }, executor))
+                    .toList()
+                    .stream()
+                    .map(CompletableFuture::join)
+                    .toList();
+        }
 
-       // 测试用例2：中国国际互联网+大学生创新创业大赛一等奖属于第几等级竞赛？能加多少分？
-        String q2 = "中国国际互联网+大学生创新创业大赛一等奖属于第几等级竞赛？能加多少分？";
-        Map<String, Object> testCase2 = new HashMap<>();
-        testCase2.put("question", q2);
-        testCase2.put("ground_truth", "中国国际“互联网+”大学生创新创业大赛属于第一等级学科竞赛，其一等奖可加50分，且该竞赛获奖实行代表作制，同一项竞赛获不同等级奖项取最高等级计分。");
-        testCase2.put("contexts", getRealContexts(q2, 5));
-        testCase2.put("answer", handbookService.getAnswer(q2));
-        testCases.add(testCase2);
+        // ── 意图分类统计 ──
+        System.out.println("\n===== 意图分类统计 =====");
+        long intentHits = items.stream().filter(it -> it.expectedIntents.equals(it.actualIntents)).count();
+        long multiTotal = items.stream().filter(it -> it.expectedIntents.size() > 1).count();
+        long multiHits = items.stream()
+                .filter(it -> it.expectedIntents.size() > 1 && it.expectedIntents.equals(it.actualIntents))
+                .count();
+        System.out.printf("意图准确率: %d/%d (%.1f%%)%n",
+                intentHits, items.size(), 100.0 * intentHits / items.size());
+        System.out.printf("多意图命中: %d/%d%n", multiHits, multiTotal);
 
-       // 测试用例3：蓝桥杯全国软件和信息技术专业人才大赛二等奖能加多少分？
-        String q3 = "蓝桥杯全国软件和信息技术专业人才大赛二等奖能加多少分？";
-        Map<String, Object> testCase3 = new HashMap<>();
-        testCase3.put("question", q3);
-        testCase3.put("ground_truth", "蓝桥杯全国软件和信息技术专业人才大赛属于第三等级学科竞赛，其二等奖可加20分，竞赛获奖日期需截至推免当年8月31日才有效。");
-        testCase3.put("contexts", getRealContexts(q3, 5));
-        testCase3.put("answer", handbookService.getAnswer(q3));
-        testCases.add(testCase3);
+        for (int i = 0; i < items.size(); i++) {
+            EvalItem it = items.get(i);
+            String match = it.expectedIntents.equals(it.actualIntents) ? "✓" :
+                    "✗ 预期:" + it.expectedIntents + " 实际:" + it.actualIntents;
+            System.out.printf("[%d/%d] %s | Q: %s%n", i + 1, items.size(), match,
+                    it.question.substring(0, Math.min(40, it.question.length())));
+        }
 
-        // 测试用例4：以东北林业大学为第一署名单位，独立作者发表的中科院2区期刊论文能加多少分？
-        String q4 = "以东北林业大学为第一署名单位，独立作者发表的中科院2区期刊论文能加多少分？";
-        Map<String, Object> testCase4 = new HashMap<>();
-        testCase4.put("question", q4);
-        testCase4.put("ground_truth", "以东北林业大学为第一署名单位，独立作者发表的中科院2区期刊论文属于顶级期刊范畴，可加30分；论文实行代表作制，发表多篇不累计计分，且发表日期需截至推免当年8月31日。");
-        testCase4.put("contexts", getRealContexts(q4, 5));
-        testCase4.put("answer", handbookService.getAnswer(q4));
-        testCases.add(testCase4);
+        // ── 组装 DeepEval 数据 ──
+        List<Map<String, Object>> evalPayload = items.stream().map(it -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("question", it.question);
+            m.put("answer", it.answer);
+            m.put("contexts", it.contexts);
+            m.put("ground_truth", it.groundTruth);
+            return m;
+        }).collect(Collectors.toList());
 
-        // 测试用例5：同时获得全国大学生数学竞赛一等奖和EI期刊论文（Ja检索），总计能加多少分？
-        String q5 = "同时获得全国大学生数学竞赛一等奖和EI期刊论文（Ja检索），总计能加多少分？";
-        Map<String, Object> testCase5 = new HashMap<>();
-        testCase5.put("question", q5);
-        testCase5.put("ground_truth", "全国大学生数学竞赛属于第二等级学科竞赛，一等奖可加40分；EI期刊论文（Ja检索）属于各专业领域高水平期刊，可加10分；学术专长总分50，其中竞赛总分50、论文总分30，但竞赛和论文分属不同类目，可累计计分，总计50分（竞赛40分+论文10分）。");
-        testCase5.put("contexts", getRealContexts(q5, 5));
-        testCase5.put("answer", handbookService.getAnswer(q5));
-        testCases.add(testCase5);
+        System.out.println("\n===== 开始 DeepEval 评估（通义千问 Judge）=====");
 
-        // 调用 RAGAS 服务
-        Map<String, Object> result = ragasClient.evaluateRAG(testCases);
+        Map<String, Object> result = deepEvalClient.evaluateRAG(evalPayload);
 
-        // 输出报告
-        System.out.println("===== RAGAS 测评报告 =====");
-        System.out.println("忠实度: " + result.get("average_faithfulness"));
-        System.out.println("回答相关性: " + result.get("average_answer_relevancy"));
-        System.out.println("召回率: " + result.get("average_context_recall"));
-        System.out.println("精准率: " + result.get("average_context_precision"));
+        // ── 评估报告 ──
+        System.out.println("\n===== DeepEval 测评报告 =====");
+        System.out.println("Judge 模型: " + result.get("model"));
+        System.out.printf("忠实度        (faithfulness)      : %.4f%n", result.get("average_faithfulness"));
+        System.out.printf("回答相关性    (answer_relevancy)   : %.4f%n", result.get("average_answer_relevancy"));
+        System.out.printf("上下文召回率  (context_recall)      : %.4f%n", result.get("average_context_recall"));
+        System.out.printf("上下文精准率  (context_precision)   : %.4f%n", result.get("average_context_precision"));
+        System.out.printf("幻觉检测      (hallucination)       : %.4f%n", result.get("average_hallucination"));
+        System.out.println("用例数: " + result.get("test_count"));
 
-        // 平均准确性: null
-        // 平均相关性: 0.6430540286346331
-        // 平均召回率: 0.9333333333333333
-        // 平均精准率: 0.79999999992
+        // 逐条详情
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> details = (List<Map<String, Object>>) result.get("details");
+        if (details != null) {
+            System.out.println("\n── 逐条详情 ──");
+            for (int i = 0; i < details.size(); i++) {
+                Map<String, Object> d = details.get(i);
+                System.out.printf("[%d] %s%n", i + 1, d.get("question"));
+                System.out.printf("    faithfulness=%.4f  answer_relevancy=%.4f  context_recall=%.4f  context_precision=%.4f  hallucination=%.4f%n",
+                        d.get("faithfulness"), d.get("answer_relevancy"),
+                        d.get("context_recall"), d.get("context_precision"),
+                        d.get("hallucination"));
+            }
+        }
+    }
+
+    // ── 测试用例 10 条 ──────────────────────────────────────────────
+
+    private List<TestCase> buildTestCases() {
+        List<TestCase> cases = new ArrayList<>();
+
+        // ① 单意图：competition
+        cases.add(new TestCase(
+                "美国大学生数学建模竞赛拿了M奖，对应什么等级？能加多少分？",
+                Set.of("competition"),
+                "美赛M奖→省级一等奖", "科技竞赛II", "0.3分"
+        ));
+
+        // ② 单意图：paper
+        cases.add(new TestCase(
+                "以东北林业大学为第一署名单位，独立作者发表的中科院2区期刊论文能加多少分？",
+                Set.of("paper"),
+                "顶级期刊", "30分", "独立作者/第一作者"
+        ));
+
+        // ③ 单意图：general（CSP）
+        cases.add(new TestCase(
+                "CSP认证考了280分能加多少分？",
+                Set.of("general"),
+                "260-299分档", "2分", "限最高一次成绩"
+        ));
+
+        // ④ 单意图：general（外语+任职）
+        cases.add(new TestCase(
+                "英语六级450分能加多少分？",
+                Set.of("general"),
+                "国家六级合格标准", "10分"
+        ));
+
+        // ⑤ 多意图：competition + paper
+        cases.add(new TestCase(
+                "我发表了一篇中科院2区论文，同时在美赛拿了M奖，分别能加多少分？能同时加分吗？",
+                Set.of("competition", "paper"),
+                "中科院2区=顶级期刊30分", "美赛M奖→省级一等奖0.3分(科技竞赛II)",
+                "论文和竞赛属于不同子类可同时加分"
+        ));
+
+        // ⑥ 多意图：competition + general
+        cases.add(new TestCase(
+                "我既是国家级大创项目负责人，又拿了科技竞赛I国家级一等奖，这两个能累计吗？",
+                Set.of("competition", "general"),
+                "大创属于其他方面2分", "科技竞赛I国家级一等奖3分",
+                "不同一级指标可累计", "合计5分"
+        ));
+
+        // ⑦ 多意图：paper + general
+        cases.add(new TestCase(
+                "英语六级过了，又发了北大核心期刊论文，外语能力和学术论文能同时加分吗？",
+                Set.of("paper", "general"),
+                "外语能力10分", "北大核心期刊2分",
+                "不同大类可累计", "合计12分"
+        ));
+
+        // ⑧ 多意图：三类混合
+        cases.add(new TestCase(
+                "我参加了美赛拿了M奖、发了一篇核心期刊、CSP考了280分、还是班长，帮我算算一共能加多少？",
+                Set.of("competition", "paper", "general"),
+                "美赛M奖0.3分", "核心期刊2分", "CSP 2分", "班长0.5分", "合计4.8分"
+        ));
+
+        // ⑨ 多意图：三类混合 + 上限
+        cases.add(new TestCase(
+                "国家级竞赛一等奖、中科院2区论文第一作者、省级三好学生，这三个方面的加分能全部累计吗？有没有总分上限？",
+                Set.of("competition", "paper", "general"),
+                "竞赛一等奖50分(学术专长)", "论文30分(学术专长)", "三好学生1分(其他方面)",
+                "学术专长上限50分所以竞赛+论文取最高", "三好学生可另加"
+        ));
+
+        // ⑩ 边界：截止日期
+        cases.add(new TestCase(
+                "竞赛获奖日期是推免当年9月1日，还能算吗？",
+                Set.of("competition"),
+                "不能", "截止日期为推免当年8月31日"
+        ));
+
+        return cases;
     }
 }

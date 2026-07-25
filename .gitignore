@@ -3,6 +3,7 @@ target/
 !**/src/main/**/target/
 !**/src/test/**/target/
 application-secret.yml
+.env
 
 ### STS ###
 .apt_generated
